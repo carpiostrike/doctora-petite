@@ -1,6 +1,6 @@
 // ============================================================
-//  DOCTORA PETITE — Vue Progression v6
-//  Con Supabase — sincronización entre dispositivos
+//  DOCTORA PETITE — Vue Progression v7
+//  Nouveau système : Références + checks individuels Vu dans
 // ============================================================
 
 import { useState, useMemo, useRef, useEffect } from "react";
@@ -64,10 +64,17 @@ async function loadFromSupabase() {
   if (error) throw error;
   return (data || []).map(row => ({
     ...row,
-    ecBooks:        row.ec_books       || [],
-    relBooks:       row.rel_books      || [],
-    vusBooks:       row.vus_books      || [],
-    subspecialties: row.subspecialties || [],
+    ecBooks:        row.ec_books        || [],
+    relBooks:       row.rel_books       || [],
+    // vusBooks: array de {name, checked}
+    vusBooks:       (row.vus_books || []).map(b =>
+      typeof b === "string" ? { name: b, checked: false } : b
+    ),
+    // refs: array de {name, checked}
+    refs:           (row.refs || []).map(r =>
+      typeof r === "string" ? { name: r, checked: false } : r
+    ),
+    subspecialties: row.subspecialties  || [],
   }));
 }
 
@@ -79,12 +86,13 @@ async function upsertTopics(topics) {
     ec_books:       t.ecBooks        || [],
     rel_books:      t.relBooks       || [],
     vus_books:      t.vusBooks       || [],
+    refs:           t.refs           || [],
     bg_hex:         t.bgHex          || "",
     specialty:      t.specialty      || "other",
     subspecialties: t.subspecialties || [],
     ec_done:        t.ec_done        || false,
     rel_done:       t.rel_done       || false,
-    vus_done:       t.vus_done       || false,
+    vus_done:       (t.vusBooks || []).some(b => b.checked),
     etudie:         t.etudie         || "none",
     note:           t.note           || "",
     pages:          t.pages          || "",
@@ -98,13 +106,13 @@ async function updateTopicInSupabase(id, changes) {
   const mapped = {};
   if (changes.ecBooks        !== undefined) mapped.ec_books       = changes.ecBooks;
   if (changes.relBooks       !== undefined) mapped.rel_books      = changes.relBooks;
-  if (changes.vusBooks       !== undefined) mapped.vus_books      = changes.vusBooks;
+  if (changes.vusBooks       !== undefined) { mapped.vus_books = changes.vusBooks; mapped.vus_done = changes.vusBooks.some(b => b.checked); }
+  if (changes.refs           !== undefined) mapped.refs           = changes.refs;
   if (changes.subspecialties !== undefined) mapped.subspecialties = changes.subspecialties;
   if (changes.etudie         !== undefined) mapped.etudie         = changes.etudie;
   if (changes.note           !== undefined) mapped.note           = changes.note;
   if (changes.pages          !== undefined) mapped.pages          = changes.pages;
   if (changes.doc            !== undefined) mapped.doc            = changes.doc;
-  if (changes.vus_done       !== undefined) mapped.vus_done       = changes.vus_done;
   const { error } = await supabase.from("topics").update(mapped).eq("id", id);
   if (error) throw error;
 }
@@ -114,12 +122,11 @@ async function deleteTopicInSupabase(id) {
   if (error) throw error;
 }
 
-// ── Estados ──────────────────────────────────────────────────
+// ── Estados (sin Terminé) ─────────────────────────────────────
 
 const ETUDIE_STATES = [
   { key:"none",    label:"○",           bg:"rgba(176,168,187,.1)",  textColor:"var(--muted)" },
   { key:"encours", label:"🟡 En cours", bg:"rgba(201,169,110,.15)", textColor:"#8A6A30" },
-  { key:"termine", label:"✅ Terminé",  bg:null,                    textColor:"white" },
 ];
 
 function nextEtudie(current) {
@@ -143,13 +150,11 @@ export default function Progress() {
   const [noteOpen,     setNoteOpen]     = useState(false);
   const [addOpen,      setAddOpen]      = useState(false);
   const [booksOpen,    setBooksOpen]    = useState(false);
-  const [vusOpen,      setVusOpen]      = useState(false);
   const [subOpen,      setSubOpen]      = useState(false);
   const [editingTopic, setEditingTopic] = useState(null);
 
   const [newTopic,  setNewTopic]  = useState({ num:"", title:"", ecInput:"", relInput:"", specialty:"cardio", note:"", pages:"" });
   const [tempBooks, setTempBooks] = useState({ ec:[], rel:[], ecInput:"", relInput:"" });
-  const [tempVus,   setTempVus]   = useState({ books:[], input:"" });
 
   // ── Cargar desde Supabase ─────────────────────────────────
   useEffect(() => {
@@ -159,7 +164,6 @@ export default function Progress() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Sync localStorage para App.js ─────────────────────────
   useEffect(() => {
     try {
       localStorage.setItem("dp_manon_v4", JSON.stringify(topics));
@@ -178,6 +182,25 @@ export default function Progress() {
     deleteTopicInSupabase(id).catch(err => notify("❌", "Erreur suppression", err.message));
   };
 
+  // ── Toggle check de Vu dans ───────────────────────────────
+  const toggleVus = (topic, idx) => {
+    const updated = topic.vusBooks.map((b, i) => i === idx ? { ...b, checked: !b.checked } : b);
+    updateTopic(topic.id, { vusBooks: updated });
+  };
+
+  // ── Toggle check de Référence ─────────────────────────────
+  const toggleRef = (topic, idx) => {
+    const updated = topic.refs.map((r, i) => i === idx ? { ...r, checked: !r.checked } : r);
+    updateTopic(topic.id, { refs: updated });
+  };
+
+  // ── Añadir referencia extra inline ────────────────────────
+  const addRef = (topic, name) => {
+    if (!name.trim()) return;
+    const updated = [...(topic.refs || []), { name: name.trim(), checked: false }];
+    updateTopic(topic.id, { refs: updated });
+  };
+
   // ── Sync Google Sheets → Supabase ─────────────────────────
   const syncGoogleSheet = async () => {
     const { sheetUrl, gapiKey } = getSheetConfig();
@@ -191,20 +214,32 @@ export default function Progress() {
       const imported = await fetchGoogleSheet(sheetUrl, gapiKey);
       const localMap = {};
       topics.forEach(t => { localMap[t.num] = t; });
+
       const merged = imported.map(t => {
         const local = localMap[t.num];
-        if (!local) return t;
+        // Construir refs desde ecBooks, marcando la primera si hay color
+        const refs = (t.ecBooks || []).map((name, i) => ({
+          name,
+          checked: t.bgHex ? i === 0 : false, // si tiene color → primera ref marcada
+        }));
+        // vusBooks como objetos con checked
+        const vusBooks = (t.vusBooks || []).map(b =>
+          typeof b === "string" ? { name: b, checked: false } : b
+        );
+
+        if (!local) return { ...t, refs, vusBooks };
         return {
           ...t,
+          refs:           local.refs?.length    ? local.refs    : refs,
+          vusBooks:       local.vusBooks?.length ? local.vusBooks : vusBooks,
           etudie:         local.etudie !== "none" ? local.etudie : t.etudie,
           note:           local.note   || t.note,
           pages:          local.pages  || t.pages,
           doc:            local.doc    || t.doc,
           subspecialties: local.subspecialties?.length ? local.subspecialties : t.subspecialties,
-          vusBooks:       local.vusBooks?.length ? local.vusBooks : t.vusBooks,
-          vus_done:       local.vus_done || t.vus_done,
         };
       });
+
       await upsertTopics(merged);
       setTopics(merged);
       const now = new Date().toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" });
@@ -241,18 +276,17 @@ export default function Progress() {
         const iRel  = H.findIndex(h => h.includes("relecture"));
         const iVus  = H.findIndex(h => h.includes("vus"));
         const iCol  = H.findIndex(h => h.includes("couleur"));
-        const iTerm = H.findIndex(h =>
-          h.includes("terminé") || h.includes("termine") || h === "fait" || h === "done" || h === "ok"
-        );
 
         const imported = [];
         for (let i = hi + 1; i < rows.length; i++) {
           const row   = rows[i];
           const titre = String(row[iT] ?? "").trim();
           if (!titre) continue;
+
           const ecStr  = String(row[iEc]  ?? "").trim();
           const relStr = String(row[iRel] ?? "").trim();
           const vusStr = String(row[iVus] ?? "").trim();
+
           const checkCols = iCol >= 0 ? [iCol, iEc] : [iEc];
           let bgHex = "";
           for (const ci of checkCols) {
@@ -260,18 +294,34 @@ export default function Progress() {
             if (cell?.s?.bgColor?.rgb && cell.s.bgColor.rgb !== "000000") { bgHex = cell.s.bgColor.rgb.toUpperCase(); break; }
             if (cell?.s?.fgColor?.rgb && cell.s.fgColor.rgb !== "000000") { bgHex = cell.s.fgColor.rgb.toUpperCase(); break; }
           }
-          const spec = HEX_TO_SPEC[bgHex] || detectSpecByName(ecStr);
+
+          const spec    = HEX_TO_SPEC[bgHex] || detectSpecByName(ecStr);
+          const ecBooks = splitBooks(ecStr);
+
+          // Refs desde ecBooks, primera marcada si tiene color
+          const refs = ecBooks.map((name, idx) => ({
+            name,
+            checked: bgHex ? idx === 0 : false,
+          }));
+
+          // Vu dans como objetos con checked
+          const vusBooks = splitBooks(vusStr).map(name => ({ name, checked: false }));
+
           imported.push({
             id:             "t_" + i + "_" + Date.now(),
             num:            String(row[iN] ?? i).trim(),
             title:          titre,
-            ecBooks:        splitBooks(ecStr),
+            ecBooks,
             relBooks:       splitBooks(relStr),
-            vusBooks:       splitBooks(vusStr),
-            bgHex, specialty: spec, subspecialties: [],
-            ec_done: false, rel_done: false,
-            vus_done:       vusStr.length > 0,
-            etudie:         (iTerm >= 0 && String(row[iTerm] ?? "").trim() ? "termine" : "none"),
+            vusBooks,
+            refs,
+            bgHex,
+            specialty:      spec,
+            subspecialties: [],
+            ec_done:        false,
+            rel_done:       false,
+            vus_done:       false,
+            etudie:         "none",
             note:"", pages:"", doc:"",
           });
         }
@@ -291,10 +341,12 @@ export default function Progress() {
   // ── Add manual ────────────────────────────────────────────
   const addTopic = async () => {
     if (!newTopic.title.trim()) return;
+    const ecBooks = splitBooks(newTopic.ecInput);
     const t = {
       id: "t_m_" + Date.now(), num: newTopic.num, title: newTopic.title,
-      ecBooks: splitBooks(newTopic.ecInput), relBooks: splitBooks(newTopic.relInput),
-      vusBooks: [], bgHex: "", specialty: newTopic.specialty, subspecialties: [],
+      ecBooks, relBooks: splitBooks(newTopic.relInput),
+      vusBooks: [], refs: ecBooks.map(name => ({ name, checked: false })),
+      bgHex: "", specialty: newTopic.specialty, subspecialties: [],
       ec_done: false, rel_done: false, vus_done: false, etudie: "none",
       note:"", pages:"", doc:"",
     };
@@ -307,47 +359,41 @@ export default function Progress() {
     } catch(err) { notify("❌","Erreur", err.message); }
   };
 
-  // ── Modals helpers ────────────────────────────────────────
   const openBooks = (topic) => {
     setEditingTopic(topic);
     setTempBooks({ ec:[...(topic.ecBooks||[])], rel:[...(topic.relBooks||[])], ecInput:"", relInput:"" });
     setBooksOpen(true);
   };
   const saveBooks = () => {
-    updateTopic(editingTopic.id, { ecBooks: tempBooks.ec, relBooks: tempBooks.rel });
+    const refs = tempBooks.ec.map((name, i) => {
+      const existing = editingTopic.refs?.find(r => r.name === name);
+      return existing || { name, checked: false };
+    });
+    updateTopic(editingTopic.id, { ecBooks: tempBooks.ec, relBooks: tempBooks.rel, refs });
     setBooksOpen(false);
     notify("✅","Livres mis à jour", editingTopic.title.slice(0,40));
   };
-  const openVus = (topic) => {
-    setEditingTopic(topic);
-    setTempVus({ books:[...(topic.vusBooks||[])], input:"" });
-    setVusOpen(true);
-  };
-  const saveVus = () => {
-    updateTopic(editingTopic.id, { vusBooks: tempVus.books, vus_done: tempVus.books.length > 0 });
-    setVusOpen(false);
-    notify("👁️","Vus mis à jour", editingTopic.title.slice(0,40));
-  };
+
   const openSub = (topic) => { setEditingTopic(topic); setSubOpen(true); };
 
   // ── Stats ─────────────────────────────────────────────────
   const stats = useMemo(() => {
     const bySpec = {};
-    MANON_SPECS.forEach(s => { bySpec[s.id] = { total:0, vus:0, etudie:0 }; });
+    MANON_SPECS.forEach(s => { bySpec[s.id] = { total:0, vus:0, refs:0 }; });
     topics.forEach(t => {
       const unique = [...new Set([t.specialty, ...(t.subspecialties||[])].filter(Boolean))];
       unique.forEach(sid => {
-        if (!bySpec[sid]) bySpec[sid] = { total:0, vus:0, etudie:0 };
+        if (!bySpec[sid]) bySpec[sid] = { total:0, vus:0, refs:0 };
         bySpec[sid].total++;
-        if (t.vus_done)           bySpec[sid].vus++;
-        if (t.etudie==="termine") bySpec[sid].etudie++;
+        if ((t.vusBooks||[]).some(b => b.checked)) bySpec[sid].vus++;
+        if ((t.refs||[]).some(r => r.checked))     bySpec[sid].refs++;
       });
     });
     return {
-      total:   topics.length,
-      vus:     topics.filter(t=>t.vus_done).length,
-      encours: topics.filter(t=>t.etudie==="encours").length,
-      termine: topics.filter(t=>t.etudie==="termine").length,
+      total: topics.length,
+      vus:   topics.filter(t => (t.vusBooks||[]).some(b => b.checked)).length,
+      refs:  topics.filter(t => (t.refs||[]).some(r => r.checked)).length,
+      encours: topics.filter(t => t.etudie==="encours").length,
       bySpec,
     };
   }, [topics]);
@@ -380,9 +426,9 @@ export default function Progress() {
         <Card style={{ padding:16 }}>
           <p className="card-label">Progression ECNi</p>
           {[
-            { label:"👁️ Vus",      val:stats.vus,     color:"#8BA888" },
-            { label:"🟡 En cours", val:stats.encours, color:"#C9A96E" },
-            { label:"✅ Terminés", val:stats.termine, color:"#5C4070" },
+            { label:"📖 Références vues", val:stats.refs,    color:"#9B8BC4" },
+            { label:"👁️ Vus dans",        val:stats.vus,     color:"#8BA888" },
+            { label:"🟡 En cours",        val:stats.encours, color:"#C9A96E" },
           ].map(s => {
             const pct = stats.total > 0 ? Math.round(s.val/stats.total*100) : 0;
             return (
@@ -407,13 +453,13 @@ export default function Progress() {
             <span style={{ marginLeft:"auto", fontFamily:"monospace", fontSize:10, color:"var(--muted)" }}>{stats.total}</span>
           </div>
           {MANON_SPECS.filter(s => (stats.bySpec[s.id]?.total||0)>0).map(spec => {
-            const s   = stats.bySpec[spec.id]||{total:0,etudie:0};
+            const s   = stats.bySpec[spec.id]||{total:0,refs:0};
             const isA = activeSpec === spec.id;
             return (
               <div key={spec.id} onClick={()=>setActiveSpec(spec.id)} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 9px", borderRadius:9, cursor:"pointer", marginBottom:2, background:isA?spec.color+"20":"transparent", fontSize:12.5, color:isA?spec.color:"var(--soft)", fontWeight:isA?500:400, transition:"all .14s" }}>
                 <span style={{ width:10,height:10,borderRadius:3,background:spec.color,display:"inline-block",flexShrink:0 }} />
                 <span style={{ flex:1 }}>{spec.icon} {spec.label}</span>
-                <span style={{ fontFamily:"monospace", fontSize:10, color:"var(--muted)" }}>{s.etudie||0}/{s.total}</span>
+                <span style={{ fontFamily:"monospace", fontSize:10, color:"var(--muted)" }}>{s.refs||0}/{s.total}</span>
               </div>
             );
           })}
@@ -470,52 +516,118 @@ export default function Progress() {
           </Card>
         )}
 
+        {/* Headers */}
         {filtered.length > 0 && (
-          <div style={{ display:"grid", gridTemplateColumns:"44px 1fr 180px 140px 160px 80px 56px", gap:5, padding:"4px 12px", marginBottom:4 }}>
-            {["N°","Thème","✏️ Écriture","📖 Relecture","👁️ Vus dans","📚 Étudié",""].map((h,i)=>(
+          <div style={{ display:"grid", gridTemplateColumns:"44px 1fr 160px 130px 200px 110px 40px", gap:5, padding:"4px 12px", marginBottom:4 }}>
+            {["N°","Thème","✏️ Écriture","📖 Relecture","👁️ Vu dans","📖 Référence",""].map((h,i)=>(
               <span key={i} style={{ fontSize:9.5, color:"var(--muted)", letterSpacing:"1px", textTransform:"uppercase", textAlign:i>1?"center":"left" }}>{h}</span>
             ))}
           </div>
         )}
 
+        {/* Rows */}
         <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
           {filtered.map(topic => {
             const spec     = MANON_SPECS.find(s=>s.id===topic.specialty)||MANON_SPECS[MANON_SPECS.length-1];
             const subSpecs = (topic.subspecialties||[]).map(sid => MANON_SPECS.find(s=>s.id===sid)).filter(Boolean);
+            const allRefsChecked = topic.refs?.length > 0 && topic.refs.every(r => r.checked);
+            const someRefChecked = topic.refs?.some(r => r.checked);
+
             return (
-              <div key={topic.id} style={{ display:"grid", gridTemplateColumns:"44px 1fr 180px 140px 160px 80px 56px", gap:5, alignItems:"start", background:topic.etudie==="termine"?spec.color+"18":topic.etudie==="encours"?"rgba(201,169,110,.06)":"white", borderRadius:12, padding:"10px 12px", border:`1px solid ${topic.etudie==="termine"?spec.color+"70":topic.etudie==="encours"?"rgba(201,169,110,.3)":"rgba(61,43,79,.06)"}`, transition:"all .15s" }}>
+              <div key={topic.id} style={{
+                display:"grid", gridTemplateColumns:"44px 1fr 160px 130px 200px 110px 40px",
+                gap:5, alignItems:"start",
+                background: allRefsChecked ? spec.color+"18" : topic.etudie==="encours" ? "rgba(201,169,110,.06)" : "white",
+                borderRadius:12, padding:"10px 12px",
+                border:`1px solid ${allRefsChecked ? spec.color+"70" : topic.etudie==="encours" ? "rgba(201,169,110,.3)" : "rgba(61,43,79,.06)"}`,
+                transition:"all .15s",
+              }}>
+
+                {/* N° */}
                 <div style={{ textAlign:"center", paddingTop:2 }}>
                   <span style={{ fontFamily:"monospace", fontSize:10.5, color:"var(--muted)" }}>{topic.num}</span>
                   {topic.bgHex && <div style={{ width:10,height:6,borderRadius:2,background:"#"+topic.bgHex,margin:"3px auto 0" }} />}
                 </div>
+
+                {/* Título + badges */}
                 <div>
-                  <div style={{ fontSize:12.5, fontWeight:500, color:"var(--ink)", lineHeight:1.35 }}>{topic.title.length>72?topic.title.slice(0,72)+"…":topic.title}</div>
+                  <div style={{ fontSize:12.5, fontWeight:500, color:"var(--ink)", lineHeight:1.35 }}>
+                    {topic.title.length>72 ? topic.title.slice(0,72)+"…" : topic.title}
+                  </div>
                   <div style={{ display:"flex", gap:4, marginTop:4, flexWrap:"wrap" }}>
                     <span style={{ fontSize:9.5, padding:"1px 7px", borderRadius:100, background:spec.color+"20", color:spec.color, fontWeight:500 }}>{spec.icon} {spec.label}</span>
                     {subSpecs.map(ss => <span key={ss.id} style={{ fontSize:9.5, padding:"1px 7px", borderRadius:100, background:ss.color+"15", color:ss.color, fontWeight:500 }}>{ss.icon} {ss.label}</span>)}
                     <span onClick={()=>openSub(topic)} style={{ fontSize:9.5, padding:"1px 7px", borderRadius:100, background:"rgba(61,43,79,.06)", color:"var(--muted)", cursor:"pointer" }}>+ matière</span>
                   </div>
+
+                  {/* Estado ○ / 🟡 */}
+                  <div style={{ marginTop:6 }}>
+                    {(()=>{
+                      const state = ETUDIE_STATES.find(s=>s.key===(topic.etudie||"none"))||ETUDIE_STATES[0];
+                      return (
+                        <button onClick={()=>updateTopic(topic.id,{etudie:nextEtudie(topic.etudie||"none")})} style={{ padding:"3px 10px", borderRadius:100, fontSize:10, fontWeight:600, cursor:"pointer", border:"none", fontFamily:"inherit", background:state.bg||"rgba(176,168,187,.1)", color:state.textColor, transition:"all .2s" }}>
+                          {state.label}
+                        </button>
+                      );
+                    })()}
+                  </div>
+
                   {topic.note && <div style={{ fontSize:10, color:"var(--gold)", marginTop:3 }}>📝 {topic.note.slice(0,45)}</div>}
                 </div>
+
+                {/* ✏️ Écriture */}
                 <div>
-                  {topic.ecBooks?.length>0?topic.ecBooks.map((b,i)=><div key={i} style={{ fontSize:10.5, color:"#5580A8", lineHeight:1.5, marginBottom:1 }}>📖 {b.length>28?b.slice(0,28)+"…":b}</div>):<span style={{ fontSize:10.5, color:"rgba(176,168,187,.6)" }}>—</span>}
-                  <div onClick={()=>openBooks(topic)} style={{ fontSize:9.5, color:"var(--muted)", marginTop:3, cursor:"pointer", textDecoration:"underline" }}>✏️ Modifier livres</div>
-                </div>
-                <div>
-                  {topic.relBooks?.length>0?topic.relBooks.map((b,i)=><div key={i} style={{ fontSize:10.5, color:"#8A6A30", lineHeight:1.5, marginBottom:1 }}>📚 {b.length>24?b.slice(0,24)+"…":b}</div>):<span style={{ fontSize:10.5, color:"rgba(176,168,187,.6)" }}>—</span>}
+                  {topic.ecBooks?.length > 0 ? topic.ecBooks.map((b,i) => (
+                    <div key={i} style={{ fontSize:10.5, color:"#5580A8", lineHeight:1.5, marginBottom:1 }}>📖 {b.length>26?b.slice(0,26)+"…":b}</div>
+                  )) : <span style={{ fontSize:10.5, color:"rgba(176,168,187,.6)" }}>—</span>}
                   <div onClick={()=>openBooks(topic)} style={{ fontSize:9.5, color:"var(--muted)", marginTop:3, cursor:"pointer", textDecoration:"underline" }}>✏️ Modifier</div>
                 </div>
+
+                {/* 📖 Relecture */}
                 <div>
-                  {topic.vusBooks?.length>0?topic.vusBooks.map((b,i)=><div key={i} style={{ fontSize:10.5, color:"#4E7A4C", lineHeight:1.5, marginBottom:1 }}>✅ {b.length>24?b.slice(0,24)+"…":b}</div>):<span style={{ fontSize:10.5, color:"rgba(176,168,187,.6)" }}>Pas encore vu</span>}
-                  <div onClick={()=>openVus(topic)} style={{ fontSize:9.5, color:"var(--muted)", marginTop:3, cursor:"pointer", textDecoration:"underline" }}>+ Ajouter / modifier</div>
+                  {topic.relBooks?.length > 0 ? topic.relBooks.map((b,i) => (
+                    <div key={i} style={{ fontSize:10.5, color:"#8A6A30", lineHeight:1.5, marginBottom:1 }}>📚 {b.length>22?b.slice(0,22)+"…":b}</div>
+                  )) : <span style={{ fontSize:10.5, color:"rgba(176,168,187,.6)" }}>—</span>}
                 </div>
-                <div style={{ textAlign:"center", paddingTop:2 }}>
-                  {(()=>{
-                    const state     = ETUDIE_STATES.find(s=>s.key===(topic.etudie||"none"))||ETUDIE_STATES[0];
-                    const isTermine = state.key==="termine";
-                    return <button onClick={()=>updateTopic(topic.id,{etudie:nextEtudie(topic.etudie||"none")})} style={{ padding:"5px 0", borderRadius:100, fontSize:10.5, fontWeight:600, cursor:"pointer", border:"none", fontFamily:"inherit", width:"100%", background:isTermine?spec.color:(state.bg||"rgba(176,168,187,.1)"), color:isTermine?"white":state.textColor, transition:"all .2s", boxShadow:isTermine?`0 2px 8px ${spec.color}50`:"none" }}>{state.label}</button>;
-                  })()}
+
+                {/* 👁️ Vu dans — check individual por libro */}
+                <div>
+                  {(topic.vusBooks||[]).length > 0 ? (
+                    <div>
+                      {topic.vusBooks.map((b, i) => (
+                        <div key={i} onClick={()=>toggleVus(topic, i)} style={{ display:"flex", alignItems:"center", gap:5, marginBottom:3, cursor:"pointer" }}>
+                          <div style={{ width:14, height:14, borderRadius:4, border:`1.5px solid ${b.checked?"#5C9460":"rgba(61,43,79,.2)"}`, background:b.checked?"#5C9460":"white", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, transition:"all .15s" }}>
+                            {b.checked && <span style={{ color:"white", fontSize:9, lineHeight:1 }}>✓</span>}
+                          </div>
+                          <span style={{ fontSize:10.5, color:b.checked?"#4E7A4C":"var(--soft)", textDecoration:b.checked?"none":"none", lineHeight:1.3 }}>
+                            {b.name.length>22 ? b.name.slice(0,22)+"…" : b.name}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <span style={{ fontSize:10.5, color:"rgba(176,168,187,.6)" }}>—</span>
+                  )}
                 </div>
+
+                {/* 📖 Référence — check por cada ref + añadir más */}
+                <div>
+                  {(topic.refs||[]).map((r, i) => (
+                    <div key={i} onClick={()=>toggleRef(topic, i)} style={{ display:"flex", alignItems:"center", gap:5, marginBottom:3, cursor:"pointer" }}>
+                      <div style={{ width:14, height:14, borderRadius:4, border:`1.5px solid ${r.checked?spec.color:"rgba(61,43,79,.2)"}`, background:r.checked?spec.color:"white", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, transition:"all .15s" }}>
+                        {r.checked && <span style={{ color:"white", fontSize:9, lineHeight:1 }}>✓</span>}
+                      </div>
+                      <span style={{ fontSize:10.5, color:r.checked?spec.color:"var(--soft)", lineHeight:1.3 }}>
+                        {r.name.length>18 ? r.name.slice(0,18)+"…" : r.name}
+                      </span>
+                    </div>
+                  ))}
+
+                  {/* Añadir referencia extra */}
+                  <AddRefInline onAdd={(name) => addRef(topic, name)} />
+                </div>
+
+                {/* Acciones */}
                 <div style={{ display:"flex", flexDirection:"column", gap:3, alignItems:"center", paddingTop:2 }}>
                   <button onClick={()=>{setEditingTopic({...topic});setNoteOpen(true);}} style={{ width:24,height:24,borderRadius:6,border:"1px solid rgba(61,43,79,.1)",background:"white",cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center" }}>📝</button>
                   <button onClick={()=>deleteTopic(topic.id)} style={{ width:24,height:24,borderRadius:6,border:"1px solid rgba(201,137,122,.2)",background:"white",cursor:"pointer",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",color:"var(--rose)" }}>×</button>
@@ -524,6 +636,7 @@ export default function Progress() {
             );
           })}
         </div>
+
         {filtered.length===0&&topics.length>0&&<div style={{ textAlign:"center", padding:32, color:"var(--muted)", fontSize:13 }}>Aucun résultat pour «&nbsp;{search}&nbsp;»</div>}
       </div>
 
@@ -531,31 +644,37 @@ export default function Progress() {
       <Modal open={booksOpen} onClose={()=>setBooksOpen(false)} title={`📚 Livres — N°${editingTopic?.num}`}>
         <div style={{ fontSize:12.5, color:"var(--soft)", marginBottom:14, fontStyle:"italic" }}>{editingTopic?.title?.slice(0,70)}</div>
         <div style={{ marginBottom:16 }}>
-          <label style={{ display:"block", fontSize:11.5, fontWeight:500, color:"var(--soft)", marginBottom:7 }}>✏️ Livres d'écriture</label>
-          {tempBooks.ec?.map((b,i)=><div key={i} style={{ display:"flex", alignItems:"center", gap:6, marginBottom:5 }}><span style={{ flex:1, fontSize:12.5, padding:"6px 10px", background:"var(--cream)", borderRadius:8, color:"var(--ink)" }}>{b}</span><button onClick={()=>setTempBooks(p=>({...p,ec:p.ec.filter((_,j)=>j!==i)}))} style={{ width:24,height:24,borderRadius:6,border:"1px solid rgba(201,137,122,.3)",background:"white",cursor:"pointer",color:"var(--rose)",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center" }}>×</button></div>)}
-          <div style={{ display:"flex", gap:6 }}><input type="text" value={tempBooks.ecInput||""} onChange={e=>setTempBooks(p=>({...p,ecInput:e.target.value}))} onKeyDown={e=>{ if(e.key==="Enter"&&tempBooks.ecInput?.trim()) setTempBooks(p=>({...p,ec:[...p.ec,p.ecInput.trim()],ecInput:""})); }} placeholder="Ajouter un livre… (Entrée)" style={{ flex:1, padding:"8px 12px", borderRadius:8, border:"1.5px solid rgba(61,43,79,.11)", background:"var(--cream)", fontSize:12.5, fontFamily:"inherit", outline:"none" }} /><button onClick={()=>{ if(tempBooks.ecInput?.trim()) setTempBooks(p=>({...p,ec:[...p.ec,p.ecInput.trim()],ecInput:""})); }} style={{ padding:"8px 14px", borderRadius:8, background:"var(--plum)", color:"white", border:"none", cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>+</button></div>
+          <label style={{ display:"block", fontSize:11.5, fontWeight:500, color:"var(--soft)", marginBottom:7 }}>✏️ Livres d'écriture (= Références)</label>
+          {tempBooks.ec?.map((b,i)=>(
+            <div key={i} style={{ display:"flex", alignItems:"center", gap:6, marginBottom:5 }}>
+              <span style={{ flex:1, fontSize:12.5, padding:"6px 10px", background:"var(--cream)", borderRadius:8, color:"var(--ink)" }}>{b}</span>
+              <button onClick={()=>setTempBooks(p=>({...p,ec:p.ec.filter((_,j)=>j!==i)}))} style={{ width:24,height:24,borderRadius:6,border:"1px solid rgba(201,137,122,.3)",background:"white",cursor:"pointer",color:"var(--rose)",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center" }}>×</button>
+            </div>
+          ))}
+          <div style={{ display:"flex", gap:6 }}>
+            <input type="text" value={tempBooks.ecInput||""} onChange={e=>setTempBooks(p=>({...p,ecInput:e.target.value}))} onKeyDown={e=>{ if(e.key==="Enter"&&tempBooks.ecInput?.trim()) setTempBooks(p=>({...p,ec:[...p.ec,p.ecInput.trim()],ecInput:""})); }} placeholder="Ajouter un livre… (Entrée)" style={{ flex:1, padding:"8px 12px", borderRadius:8, border:"1.5px solid rgba(61,43,79,.11)", background:"var(--cream)", fontSize:12.5, fontFamily:"inherit", outline:"none" }} />
+            <button onClick={()=>{ if(tempBooks.ecInput?.trim()) setTempBooks(p=>({...p,ec:[...p.ec,p.ecInput.trim()],ecInput:""})); }} style={{ padding:"8px 14px", borderRadius:8, background:"var(--plum)", color:"white", border:"none", cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>+</button>
+          </div>
         </div>
         <div>
           <label style={{ display:"block", fontSize:11.5, fontWeight:500, color:"var(--soft)", marginBottom:7 }}>📖 Livres de relecture</label>
-          {tempBooks.rel?.map((b,i)=><div key={i} style={{ display:"flex", alignItems:"center", gap:6, marginBottom:5 }}><span style={{ flex:1, fontSize:12.5, padding:"6px 10px", background:"var(--cream)", borderRadius:8, color:"var(--ink)" }}>{b}</span><button onClick={()=>setTempBooks(p=>({...p,rel:p.rel.filter((_,j)=>j!==i)}))} style={{ width:24,height:24,borderRadius:6,border:"1px solid rgba(201,137,122,.3)",background:"white",cursor:"pointer",color:"var(--rose)",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center" }}>×</button></div>)}
-          <div style={{ display:"flex", gap:6 }}><input type="text" value={tempBooks.relInput||""} onChange={e=>setTempBooks(p=>({...p,relInput:e.target.value}))} onKeyDown={e=>{ if(e.key==="Enter"&&tempBooks.relInput?.trim()) setTempBooks(p=>({...p,rel:[...p.rel,p.relInput.trim()],relInput:""})); }} placeholder="Ajouter un libro… (Entrée)" style={{ flex:1, padding:"8px 12px", borderRadius:8, border:"1.5px solid rgba(61,43,79,.11)", background:"var(--cream)", fontSize:12.5, fontFamily:"inherit", outline:"none" }} /><button onClick={()=>{ if(tempBooks.relInput?.trim()) setTempBooks(p=>({...p,rel:[...p.rel,p.relInput.trim()],relInput:""})); }} style={{ padding:"8px 14px", borderRadius:8, background:"var(--plum)", color:"white", border:"none", cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>+</button></div>
+          {tempBooks.rel?.map((b,i)=>(
+            <div key={i} style={{ display:"flex", alignItems:"center", gap:6, marginBottom:5 }}>
+              <span style={{ flex:1, fontSize:12.5, padding:"6px 10px", background:"var(--cream)", borderRadius:8, color:"var(--ink)" }}>{b}</span>
+              <button onClick={()=>setTempBooks(p=>({...p,rel:p.rel.filter((_,j)=>j!==i)}))} style={{ width:24,height:24,borderRadius:6,border:"1px solid rgba(201,137,122,.3)",background:"white",cursor:"pointer",color:"var(--rose)",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center" }}>×</button>
+            </div>
+          ))}
+          <div style={{ display:"flex", gap:6 }}>
+            <input type="text" value={tempBooks.relInput||""} onChange={e=>setTempBooks(p=>({...p,relInput:e.target.value}))} onKeyDown={e=>{ if(e.key==="Enter"&&tempBooks.relInput?.trim()) setTempBooks(p=>({...p,rel:[...p.rel,p.relInput.trim()],relInput:""})); }} placeholder="Ajouter un livre… (Entrée)" style={{ flex:1, padding:"8px 12px", borderRadius:8, border:"1.5px solid rgba(61,43,79,.11)", background:"var(--cream)", fontSize:12.5, fontFamily:"inherit", outline:"none" }} />
+            <button onClick={()=>{ if(tempBooks.relInput?.trim()) setTempBooks(p=>({...p,rel:[...p.rel,p.relInput.trim()],relInput:""})); }} style={{ padding:"8px 14px", borderRadius:8, background:"var(--plum)", color:"white", border:"none", cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>+</button>
+          </div>
         </div>
         <div className="modal-actions"><Btn variant="ghost" onClick={()=>setBooksOpen(false)}>Annuler</Btn><Btn variant="primary" onClick={saveBooks}>Sauvegarder</Btn></div>
-      </Modal>
-
-      {/* ── MODAL: Vus ── */}
-      <Modal open={vusOpen} onClose={()=>setVusOpen(false)} title={`👁️ Vu dans — N°${editingTopic?.num}`}>
-        <div style={{ fontSize:12.5, color:"var(--soft)", marginBottom:14, fontStyle:"italic" }}>{editingTopic?.title?.slice(0,70)}</div>
-        <label style={{ display:"block", fontSize:11.5, fontWeight:500, color:"var(--soft)", marginBottom:7 }}>Dans quels livres as-tu vu ce thème ?</label>
-        {tempVus.books?.map((b,i)=><div key={i} style={{ display:"flex", alignItems:"center", gap:6, marginBottom:5 }}><span style={{ flex:1, fontSize:12.5, padding:"6px 10px", background:"rgba(139,168,136,.1)", borderRadius:8, color:"#4E7A4C" }}>✅ {b}</span><button onClick={()=>setTempVus(p=>({...p,books:p.books.filter((_,j)=>j!==i)}))} style={{ width:24,height:24,borderRadius:6,border:"1px solid rgba(201,137,122,.3)",background:"white",cursor:"pointer",color:"var(--rose)",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center" }}>×</button></div>)}
-        <div style={{ display:"flex", gap:6, marginTop:4 }}><input type="text" value={tempVus.input||""} onChange={e=>setTempVus(p=>({...p,input:e.target.value}))} onKeyDown={e=>{ if(e.key==="Enter"&&tempVus.input?.trim()) setTempVus(p=>({...p,books:[...p.books,p.input.trim()],input:""})); }} placeholder="Nom du livre ou matière…" style={{ flex:1, padding:"8px 12px", borderRadius:8, border:"1.5px solid rgba(61,43,79,.11)", background:"var(--cream)", fontSize:12.5, fontFamily:"inherit", outline:"none" }} /><button onClick={()=>{ if(tempVus.input?.trim()) setTempVus(p=>({...p,books:[...p.books,p.input.trim()],input:""})); }} style={{ padding:"8px 14px", borderRadius:8, background:"var(--sage)", color:"white", border:"none", cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>+</button></div>
-        <div className="modal-actions"><Btn variant="ghost" onClick={()=>setVusOpen(false)}>Annuler</Btn><Btn variant="primary" onClick={saveVus}>Sauvegarder</Btn></div>
       </Modal>
 
       {/* ── MODAL: Subspecialty ── */}
       <Modal open={subOpen} onClose={()=>setSubOpen(false)} title={`🏷️ Sous-spécialités — N°${editingTopic?.num}`}>
         <div style={{ fontSize:12.5, color:"var(--soft)", marginBottom:14, fontStyle:"italic" }}>{editingTopic?.title?.slice(0,70)}</div>
-        <p style={{ fontSize:12, color:"var(--soft)", marginBottom:12, lineHeight:1.6 }}>Ce thème apparaîtra aussi dans les filtres des spécialités sélectionnées.</p>
         <div style={{ display:"flex", flexWrap:"wrap", gap:7 }}>
           {MANON_SPECS.filter(s=>s.id!==editingTopic?.specialty&&s.id!=="other").map(spec => {
             const isSelected = (editingTopic?.subspecialties||[]).includes(spec.id);
@@ -581,10 +700,47 @@ export default function Progress() {
           <Field label="Spécialité"><select value={newTopic.specialty} onChange={e=>setNewTopic(p=>({...p,specialty:e.target.value}))}>{MANON_SPECS.map(s=><option key={s.id} value={s.id}>{s.icon} {s.label}</option>)}</select></Field>
         </div>
         <Field label="Titre"><input type="text" value={newTopic.title} onChange={e=>setNewTopic(p=>({...p,title:e.target.value}))} placeholder="Titre officiel ECNi…" /></Field>
-        <Field label="✏️ Collège en écriture (séparer par •)"><input type="text" value={newTopic.ecInput||""} onChange={e=>setNewTopic(p=>({...p,ecInput:e.target.value}))} placeholder="ex: Collège Cardio • Thérapeutique" /></Field>
+        <Field label="✏️ Collège en écriture — séparés par •"><input type="text" value={newTopic.ecInput||""} onChange={e=>setNewTopic(p=>({...p,ecInput:e.target.value}))} placeholder="ex: Collège Cardio • Thérapeutique" /></Field>
         <Field label="📖 Collège en relecture (optionnel)"><input type="text" value={newTopic.relInput||""} onChange={e=>setNewTopic(p=>({...p,relInput:e.target.value}))} placeholder="ex: Médecine interne • Urgences" /></Field>
         <div className="modal-actions"><Btn variant="ghost" onClick={()=>setAddOpen(false)}>Annuler</Btn><Btn variant="primary" onClick={addTopic}>Ajouter</Btn></div>
       </Modal>
+    </div>
+  );
+}
+
+// ── Componente inline para añadir referencia extra ───────────
+function AddRefInline({ onAdd }) {
+  const [open, setOpen]   = useState(false);
+  const [val,  setVal]    = useState("");
+  const inputRef          = useRef();
+
+  useEffect(() => { if (open && inputRef.current) inputRef.current.focus(); }, [open]);
+
+  const confirm = () => {
+    if (val.trim()) { onAdd(val); setVal(""); setOpen(false); }
+  };
+
+  if (!open) {
+    return (
+      <div onClick={()=>setOpen(true)} style={{ fontSize:9.5, color:"var(--muted)", cursor:"pointer", marginTop:4, display:"inline-flex", alignItems:"center", gap:3 }}>
+        <span style={{ fontSize:11 }}>+</span> Autre référence
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display:"flex", gap:4, marginTop:4 }}>
+      <input
+        ref={inputRef}
+        type="text"
+        value={val}
+        onChange={e=>setVal(e.target.value)}
+        onKeyDown={e=>{ if(e.key==="Enter") confirm(); if(e.key==="Escape") setOpen(false); }}
+        placeholder="Nom du livre…"
+        style={{ flex:1, fontSize:10.5, padding:"3px 7px", borderRadius:6, border:"1.5px solid rgba(61,43,79,.15)", fontFamily:"inherit", outline:"none" }}
+      />
+      <button onClick={confirm} style={{ padding:"3px 8px", borderRadius:6, background:"var(--violet)", color:"white", border:"none", cursor:"pointer", fontSize:11 }}>+</button>
+      <button onClick={()=>setOpen(false)} style={{ padding:"3px 6px", borderRadius:6, background:"transparent", color:"var(--muted)", border:"none", cursor:"pointer", fontSize:12 }}>×</button>
     </div>
   );
 }
