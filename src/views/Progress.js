@@ -1,6 +1,6 @@
 // ============================================================
-//  DOCTORA PETITE — Vue Progression v7
-//  Nouveau système : Références + checks individuels Vu dans
+//  DOCTORA PETITE — Vue Progression v8
+//  Referencias completas, color especialidad, stats útiles
 // ============================================================
 
 import { useState, useMemo, useRef, useEffect } from "react";
@@ -66,14 +66,10 @@ async function loadFromSupabase() {
     ...row,
     ecBooks:        row.ec_books        || [],
     relBooks:       row.rel_books       || [],
-    // vusBooks: array de {name, checked}
     vusBooks:       (row.vus_books || []).map(b =>
       typeof b === "string" ? { name: b, checked: false } : b
     ),
-    // refs: array de {name, checked}
-    refs:           (row.refs || []).map(r =>
-      typeof r === "string" ? { name: r, checked: false } : r
-    ),
+    refs:           row.refs            || [],
     subspecialties: row.subspecialties  || [],
   }));
 }
@@ -90,8 +86,8 @@ async function upsertTopics(topics) {
     bg_hex:         t.bgHex          || "",
     specialty:      t.specialty      || "other",
     subspecialties: t.subspecialties || [],
-    ec_done:        t.ec_done        || false,
-    rel_done:       t.rel_done       || false,
+    ec_done:        false,
+    rel_done:       false,
     vus_done:       (t.vusBooks || []).some(b => b.checked),
     etudie:         t.etudie         || "none",
     note:           t.note           || "",
@@ -122,7 +118,7 @@ async function deleteTopicInSupabase(id) {
   if (error) throw error;
 }
 
-// ── Estados (sin Terminé) ─────────────────────────────────────
+// ── Estados (solo ○ y 🟡) ─────────────────────────────────────
 
 const ETUDIE_STATES = [
   { key:"none",    label:"○",           bg:"rgba(176,168,187,.1)",  textColor:"var(--muted)" },
@@ -134,7 +130,7 @@ function nextEtudie(current) {
   return ETUDIE_STATES[(idx + 1) % ETUDIE_STATES.length].key;
 }
 
-// ── Componente ───────────────────────────────────────────────
+// ── Componente principal ──────────────────────────────────────
 
 export default function Progress() {
   const { documents, notify, setSettingsOpen } = useApp();
@@ -171,7 +167,6 @@ export default function Progress() {
     } catch {}
   }, [topics]);
 
-  // ── Mutaciones ────────────────────────────────────────────
   const updateTopic = (id, changes) => {
     setTopics(prev => prev.map(t => t.id === id ? { ...t, ...changes } : t));
     updateTopicInSupabase(id, changes).catch(err => notify("❌", "Erreur sauvegarde", err.message));
@@ -188,16 +183,10 @@ export default function Progress() {
     updateTopic(topic.id, { vusBooks: updated });
   };
 
-  // ── Toggle check de Référence ─────────────────────────────
-  const toggleRef = (topic, idx) => {
-    const updated = topic.refs.map((r, i) => i === idx ? { ...r, checked: !r.checked } : r);
-    updateTopic(topic.id, { refs: updated });
-  };
-
   // ── Añadir referencia extra inline ────────────────────────
   const addRef = (topic, name) => {
     if (!name.trim()) return;
-    const updated = [...(topic.refs || []), { name: name.trim(), checked: false }];
+    const updated = [...(topic.refs || []), name.trim()];
     updateTopic(topic.id, { refs: updated });
   };
 
@@ -216,23 +205,18 @@ export default function Progress() {
       topics.forEach(t => { localMap[t.num] = t; });
 
       const merged = imported.map(t => {
-        const local = localMap[t.num];
-        // Construir refs desde ecBooks, marcando la primera si hay color
-        const refs = (t.ecBooks || []).map((name, i) => ({
-          name,
-          checked: t.bgHex ? i === 0 : false, // si tiene color → primera ref marcada
-        }));
-        // vusBooks como objetos con checked
+        // refs = ecBooks (nombres de libros de referencia, sin checks)
+        const refs = t.ecBooks || [];
         const vusBooks = (t.vusBooks || []).map(b =>
           typeof b === "string" ? { name: b, checked: false } : b
         );
-
-        if (!local) return { ...t, refs, vusBooks };
+        if (!localMap[t.num]) return { ...t, refs, vusBooks };
+        const local = localMap[t.num];
         return {
           ...t,
-          refs:           local.refs?.length    ? local.refs    : refs,
-          vusBooks:       local.vusBooks?.length ? local.vusBooks : vusBooks,
-          etudie:         local.etudie !== "none" ? local.etudie : t.etudie,
+          refs:           local.refs?.length     ? local.refs     : refs,
+          vusBooks:       local.vusBooks?.length  ? local.vusBooks : vusBooks,
+          etudie:         local.etudie !== "none" ? local.etudie   : t.etudie,
           note:           local.note   || t.note,
           pages:          local.pages  || t.pages,
           doc:            local.doc    || t.doc,
@@ -253,7 +237,7 @@ export default function Progress() {
     }
   };
 
-  // ── Import Excel → Supabase ───────────────────────────────
+  // ── Import Excel ──────────────────────────────────────────
   const importExcel = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -298,29 +282,18 @@ export default function Progress() {
           const spec    = HEX_TO_SPEC[bgHex] || detectSpecByName(ecStr);
           const ecBooks = splitBooks(ecStr);
 
-          // Refs desde ecBooks, primera marcada si tiene color
-          const refs = ecBooks.map((name, idx) => ({
-            name,
-            checked: bgHex ? idx === 0 : false,
-          }));
-
-          // Vu dans como objetos con checked
-          const vusBooks = splitBooks(vusStr).map(name => ({ name, checked: false }));
-
           imported.push({
             id:             "t_" + i + "_" + Date.now(),
             num:            String(row[iN] ?? i).trim(),
             title:          titre,
             ecBooks,
             relBooks:       splitBooks(relStr),
-            vusBooks,
-            refs,
+            vusBooks:       splitBooks(vusStr).map(name => ({ name, checked: false })),
+            refs:           ecBooks, // refs = nombres de libros de écriture
             bgHex,
             specialty:      spec,
             subspecialties: [],
-            ec_done:        false,
-            rel_done:       false,
-            vus_done:       false,
+            ec_done:        false, rel_done: false, vus_done: false,
             etudie:         "none",
             note:"", pages:"", doc:"",
           });
@@ -330,9 +303,7 @@ export default function Progress() {
         await upsertTopics(imported);
         setTopics(imported);
         notify("✅", `${imported.length} thèmes importés !`, "Excel ECNi → Supabase 🌸");
-      } catch(err) {
-        notify("❌","Erreur import", err.message);
-      }
+      } catch(err) { notify("❌","Erreur import", err.message); }
     };
     reader.readAsArrayBuffer(file);
     e.target.value = "";
@@ -345,7 +316,7 @@ export default function Progress() {
     const t = {
       id: "t_m_" + Date.now(), num: newTopic.num, title: newTopic.title,
       ecBooks, relBooks: splitBooks(newTopic.relInput),
-      vusBooks: [], refs: ecBooks.map(name => ({ name, checked: false })),
+      vusBooks: [], refs: ecBooks,
       bgHex: "", specialty: newTopic.specialty, subspecialties: [],
       ec_done: false, rel_done: false, vus_done: false, etudie: "none",
       note:"", pages:"", doc:"",
@@ -365,35 +336,33 @@ export default function Progress() {
     setBooksOpen(true);
   };
   const saveBooks = () => {
-    const refs = tempBooks.ec.map((name, i) => {
-      const existing = editingTopic.refs?.find(r => r.name === name);
-      return existing || { name, checked: false };
-    });
-    updateTopic(editingTopic.id, { ecBooks: tempBooks.ec, relBooks: tempBooks.rel, refs });
+    updateTopic(editingTopic.id, { ecBooks: tempBooks.ec, relBooks: tempBooks.rel, refs: tempBooks.ec });
     setBooksOpen(false);
     notify("✅","Livres mis à jour", editingTopic.title.slice(0,40));
   };
-
   const openSub = (topic) => { setEditingTopic(topic); setSubOpen(true); };
 
-  // ── Stats ─────────────────────────────────────────────────
+  // ── Stats útiles ──────────────────────────────────────────
   const stats = useMemo(() => {
     const bySpec = {};
-    MANON_SPECS.forEach(s => { bySpec[s.id] = { total:0, vus:0, refs:0 }; });
+    MANON_SPECS.forEach(s => { bySpec[s.id] = { total:0, conRef:0, sinRef:0, vus:0, encours:0 }; });
     topics.forEach(t => {
       const unique = [...new Set([t.specialty, ...(t.subspecialties||[])].filter(Boolean))];
       unique.forEach(sid => {
-        if (!bySpec[sid]) bySpec[sid] = { total:0, vus:0, refs:0 };
+        if (!bySpec[sid]) bySpec[sid] = { total:0, conRef:0, sinRef:0, vus:0, encours:0 };
         bySpec[sid].total++;
-        if ((t.vusBooks||[]).some(b => b.checked)) bySpec[sid].vus++;
-        if ((t.refs||[]).some(r => r.checked))     bySpec[sid].refs++;
+        if (t.bgHex)                                      bySpec[sid].conRef++;
+        if (!t.bgHex)                                     bySpec[sid].sinRef++;
+        if ((t.vusBooks||[]).some(b => b.checked))        bySpec[sid].vus++;
+        if (t.etudie === "encours")                        bySpec[sid].encours++;
       });
     });
     return {
-      total: topics.length,
-      vus:   topics.filter(t => (t.vusBooks||[]).some(b => b.checked)).length,
-      refs:  topics.filter(t => (t.refs||[]).some(r => r.checked)).length,
-      encours: topics.filter(t => t.etudie==="encours").length,
+      total:   topics.length,
+      conRef:  topics.filter(t => t.bgHex).length,
+      sinRef:  topics.filter(t => !t.bgHex).length,
+      vus:     topics.filter(t => (t.vusBooks||[]).some(b => b.checked)).length,
+      encours: topics.filter(t => t.etudie === "encours").length,
       bySpec,
     };
   }, [topics]);
@@ -423,28 +392,54 @@ export default function Progress() {
       {/* ── LEFT ── */}
       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
 
+        {/* Stats útiles */}
         <Card style={{ padding:16 }}>
-          <p className="card-label">Progression ECNi</p>
-          {[
-            { label:"📖 Références vues", val:stats.refs,    color:"#9B8BC4" },
-            { label:"👁️ Vus dans",        val:stats.vus,     color:"#8BA888" },
-            { label:"🟡 En cours",        val:stats.encours, color:"#C9A96E" },
-          ].map(s => {
-            const pct = stats.total > 0 ? Math.round(s.val/stats.total*100) : 0;
-            return (
-              <div key={s.label} style={{ marginBottom:10 }}>
-                <div style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
-                  <span style={{ fontSize:12, color:"var(--soft)" }}>{s.label}</span>
-                  <span style={{ fontFamily:"monospace", fontSize:10.5, color:"var(--muted)" }}>{s.val}/{stats.total} · {pct}%</span>
-                </div>
-                <div style={{ height:4, background:"var(--blush)", borderRadius:100, overflow:"hidden" }}>
-                  <div style={{ height:"100%", width:`${pct}%`, background:s.color, borderRadius:100, transition:"width 1s" }} />
-                </div>
-              </div>
-            );
-          })}
+          <p className="card-label">Vue d'ensemble</p>
+
+          {/* Con referencia vs sin referencia */}
+          <div style={{ marginBottom:14 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}>
+              <span style={{ fontSize:11.5, color:"var(--soft)", fontWeight:500 }}>Avec référence</span>
+              <span style={{ fontFamily:"monospace", fontSize:11, color:"var(--muted)" }}>{stats.conRef}/{stats.total}</span>
+            </div>
+            <div style={{ height:6, background:"var(--blush)", borderRadius:100, overflow:"hidden", marginBottom:6 }}>
+              <div style={{ height:"100%", width:`${stats.total>0?Math.round(stats.conRef/stats.total*100):0}%`, background:"var(--violet)", borderRadius:100, transition:"width 1s" }} />
+            </div>
+            {/* Desglose visual */}
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+              <span style={{ fontSize:10.5, padding:"2px 8px", borderRadius:100, background:"rgba(122,68,144,.12)", color:"var(--violet)", fontWeight:500 }}>
+                📖 {stats.conRef} avec réf.
+              </span>
+              <span style={{ fontSize:10.5, padding:"2px 8px", borderRadius:100, background:"rgba(201,137,122,.12)", color:"var(--rose)", fontWeight:500 }}>
+                ○ {stats.sinRef} sans réf.
+              </span>
+            </div>
+          </div>
+
+          {/* Vus dans */}
+          <div style={{ marginBottom:14 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+              <span style={{ fontSize:11.5, color:"var(--soft)", fontWeight:500 }}>👁️ Vus dans le cours</span>
+              <span style={{ fontFamily:"monospace", fontSize:11, color:"var(--muted)" }}>{stats.vus}/{stats.total}</span>
+            </div>
+            <div style={{ height:6, background:"var(--blush)", borderRadius:100, overflow:"hidden" }}>
+              <div style={{ height:"100%", width:`${stats.total>0?Math.round(stats.vus/stats.total*100):0}%`, background:"#8BA888", borderRadius:100, transition:"width 1s" }} />
+            </div>
+          </div>
+
+          {/* En cours */}
+          <div>
+            <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+              <span style={{ fontSize:11.5, color:"var(--soft)", fontWeight:500 }}>🟡 En cours de révision</span>
+              <span style={{ fontFamily:"monospace", fontSize:11, color:"var(--muted)" }}>{stats.encours}/{stats.total}</span>
+            </div>
+            <div style={{ height:6, background:"var(--blush)", borderRadius:100, overflow:"hidden" }}>
+              <div style={{ height:"100%", width:`${stats.total>0?Math.round(stats.encours/stats.total*100):0}%`, background:"#C9A96E", borderRadius:100, transition:"width 1s" }} />
+            </div>
+          </div>
         </Card>
 
+        {/* Par spécialité */}
         <Card style={{ padding:16 }}>
           <p className="card-label">Par spécialité</p>
           <div onClick={()=>setActiveSpec("all")} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 9px", borderRadius:9, cursor:"pointer", marginBottom:2, background:activeSpec==="all"?"rgba(61,43,79,.08)":"transparent", fontSize:12.5, color:activeSpec==="all"?"var(--plum)":"var(--soft)", fontWeight:activeSpec==="all"?500:400 }}>
@@ -453,24 +448,25 @@ export default function Progress() {
             <span style={{ marginLeft:"auto", fontFamily:"monospace", fontSize:10, color:"var(--muted)" }}>{stats.total}</span>
           </div>
           {MANON_SPECS.filter(s => (stats.bySpec[s.id]?.total||0)>0).map(spec => {
-            const s   = stats.bySpec[spec.id]||{total:0,refs:0};
+            const s   = stats.bySpec[spec.id]||{total:0,conRef:0};
             const isA = activeSpec === spec.id;
             return (
               <div key={spec.id} onClick={()=>setActiveSpec(spec.id)} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 9px", borderRadius:9, cursor:"pointer", marginBottom:2, background:isA?spec.color+"20":"transparent", fontSize:12.5, color:isA?spec.color:"var(--soft)", fontWeight:isA?500:400, transition:"all .14s" }}>
                 <span style={{ width:10,height:10,borderRadius:3,background:spec.color,display:"inline-block",flexShrink:0 }} />
                 <span style={{ flex:1 }}>{spec.icon} {spec.label}</span>
-                <span style={{ fontFamily:"monospace", fontSize:10, color:"var(--muted)" }}>{s.refs||0}/{s.total}</span>
+                <span style={{ fontFamily:"monospace", fontSize:10, color:"var(--muted)" }}>{s.conRef||0}/{s.total} réf.</span>
               </div>
             );
           })}
         </Card>
 
+        {/* Sync */}
         <Card style={{ padding:16 }}>
           <p className="card-label">Importer / Synchroniser</p>
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
             <button onClick={syncGoogleSheet} disabled={syncing} style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:7, padding:"10px 17px", borderRadius:100, fontSize:12.5, fontWeight:600, cursor:syncing?"not-allowed":"pointer", border:"none", fontFamily:"inherit", background:syncing?"rgba(122,68,144,.4)":(sheetConfigured?"var(--violet)":"rgba(122,68,144,.15)"), color:sheetConfigured?"white":"var(--violet)", transition:"all .2s", boxShadow:(syncing||!sheetConfigured)?"none":"0 2px 10px rgba(122,68,144,.25)" }}>
-              <span style={{ fontSize:15 }}>{syncing ? "⏳" : "🔄"}</span>
-              {syncing ? "Synchronisation…" : "Sync Google Sheets"}
+              <span style={{ fontSize:15 }}>{syncing?"⏳":"🔄"}</span>
+              {syncing?"Synchronisation…":"Sync Google Sheets"}
             </button>
             {lastSync ? (
               <p style={{ fontSize:10, color:"var(--muted)", textAlign:"center", margin:0 }}>✓ Dernière sync : {lastSync}</p>
@@ -518,8 +514,8 @@ export default function Progress() {
 
         {/* Headers */}
         {filtered.length > 0 && (
-          <div style={{ display:"grid", gridTemplateColumns:"44px 1fr 160px 130px 200px 110px 40px", gap:5, padding:"4px 12px", marginBottom:4 }}>
-            {["N°","Thème","✏️ Écriture","📖 Relecture","👁️ Vu dans","📖 Référence",""].map((h,i)=>(
+          <div style={{ display:"grid", gridTemplateColumns:"44px 1fr 180px 150px 180px 40px", gap:5, padding:"4px 12px", marginBottom:4 }}>
+            {["N°","Thème","📖 Référence","📚 Relecture","👁️ Vu dans",""].map((h,i)=>(
               <span key={i} style={{ fontSize:9.5, color:"var(--muted)", letterSpacing:"1px", textTransform:"uppercase", textAlign:i>1?"center":"left" }}>{h}</span>
             ))}
           </div>
@@ -530,26 +526,28 @@ export default function Progress() {
           {filtered.map(topic => {
             const spec     = MANON_SPECS.find(s=>s.id===topic.specialty)||MANON_SPECS[MANON_SPECS.length-1];
             const subSpecs = (topic.subspecialties||[]).map(sid => MANON_SPECS.find(s=>s.id===sid)).filter(Boolean);
-            const allRefsChecked = topic.refs?.length > 0 && topic.refs.every(r => r.checked);
-            const someRefChecked = topic.refs?.some(r => r.checked);
+            const hasColor = !!topic.bgHex;
 
             return (
               <div key={topic.id} style={{
-                display:"grid", gridTemplateColumns:"44px 1fr 160px 130px 200px 110px 40px",
+                display:"grid", gridTemplateColumns:"44px 1fr 180px 150px 180px 40px",
                 gap:5, alignItems:"start",
-                background: allRefsChecked ? spec.color+"18" : topic.etudie==="encours" ? "rgba(201,169,110,.06)" : "white",
+                // Color de fondo = color de especialidad si tiene color en Excel
+                background: hasColor ? spec.color+"14" : topic.etudie==="encours" ? "rgba(201,169,110,.06)" : "white",
                 borderRadius:12, padding:"10px 12px",
-                border:`1px solid ${allRefsChecked ? spec.color+"70" : topic.etudie==="encours" ? "rgba(201,169,110,.3)" : "rgba(61,43,79,.06)"}`,
+                border:`1.5px solid ${hasColor ? spec.color+"50" : topic.etudie==="encours" ? "rgba(201,169,110,.3)" : "rgba(61,43,79,.06)"}`,
                 transition:"all .15s",
               }}>
 
-                {/* N° */}
+                {/* N° + indicador de color */}
                 <div style={{ textAlign:"center", paddingTop:2 }}>
                   <span style={{ fontFamily:"monospace", fontSize:10.5, color:"var(--muted)" }}>{topic.num}</span>
-                  {topic.bgHex && <div style={{ width:10,height:6,borderRadius:2,background:"#"+topic.bgHex,margin:"3px auto 0" }} />}
+                  {hasColor && (
+                    <div style={{ width:10, height:10, borderRadius:"50%", background:spec.color, margin:"4px auto 0", boxShadow:`0 0 4px ${spec.color}80` }} />
+                  )}
                 </div>
 
-                {/* Título + badges */}
+                {/* Título + badges + estado */}
                 <div>
                   <div style={{ fontSize:12.5, fontWeight:500, color:"var(--ink)", lineHeight:1.35 }}>
                     {topic.title.length>72 ? topic.title.slice(0,72)+"…" : topic.title}
@@ -559,48 +557,50 @@ export default function Progress() {
                     {subSpecs.map(ss => <span key={ss.id} style={{ fontSize:9.5, padding:"1px 7px", borderRadius:100, background:ss.color+"15", color:ss.color, fontWeight:500 }}>{ss.icon} {ss.label}</span>)}
                     <span onClick={()=>openSub(topic)} style={{ fontSize:9.5, padding:"1px 7px", borderRadius:100, background:"rgba(61,43,79,.06)", color:"var(--muted)", cursor:"pointer" }}>+ matière</span>
                   </div>
-
-                  {/* Estado ○ / 🟡 */}
-                  <div style={{ marginTop:6 }}>
+                  <div style={{ marginTop:5 }}>
                     {(()=>{
                       const state = ETUDIE_STATES.find(s=>s.key===(topic.etudie||"none"))||ETUDIE_STATES[0];
-                      return (
-                        <button onClick={()=>updateTopic(topic.id,{etudie:nextEtudie(topic.etudie||"none")})} style={{ padding:"3px 10px", borderRadius:100, fontSize:10, fontWeight:600, cursor:"pointer", border:"none", fontFamily:"inherit", background:state.bg||"rgba(176,168,187,.1)", color:state.textColor, transition:"all .2s" }}>
-                          {state.label}
-                        </button>
-                      );
+                      return <button onClick={()=>updateTopic(topic.id,{etudie:nextEtudie(topic.etudie||"none")})} style={{ padding:"2px 10px", borderRadius:100, fontSize:10, fontWeight:600, cursor:"pointer", border:"none", fontFamily:"inherit", background:state.bg, color:state.textColor }}>{state.label}</button>;
                     })()}
                   </div>
-
                   {topic.note && <div style={{ fontSize:10, color:"var(--gold)", marginTop:3 }}>📝 {topic.note.slice(0,45)}</div>}
                 </div>
 
-                {/* ✏️ Écriture */}
+                {/* 📖 Référence — texto completo sin cortar + añadir más */}
                 <div>
-                  {topic.ecBooks?.length > 0 ? topic.ecBooks.map((b,i) => (
-                    <div key={i} style={{ fontSize:10.5, color:"#5580A8", lineHeight:1.5, marginBottom:1 }}>📖 {b.length>26?b.slice(0,26)+"…":b}</div>
-                  )) : <span style={{ fontSize:10.5, color:"rgba(176,168,187,.6)" }}>—</span>}
-                  <div onClick={()=>openBooks(topic)} style={{ fontSize:9.5, color:"var(--muted)", marginTop:3, cursor:"pointer", textDecoration:"underline" }}>✏️ Modifier</div>
+                  {(topic.refs||[]).length > 0 ? (
+                    <div>
+                      {topic.refs.map((r, i) => (
+                        <div key={i} style={{ fontSize:10.5, color:spec.color, lineHeight:1.5, marginBottom:2, fontWeight: i===0 ? 500 : 400 }}>
+                          📖 {typeof r === "string" ? r : r.name}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <span style={{ fontSize:10.5, color:"rgba(176,168,187,.6)" }}>—</span>
+                  )}
+                  <AddRefInline onAdd={(name) => addRef(topic, name)} />
+                  <div onClick={()=>openBooks(topic)} style={{ fontSize:9.5, color:"var(--muted)", marginTop:4, cursor:"pointer", textDecoration:"underline" }}>✏️ Modifier</div>
                 </div>
 
-                {/* 📖 Relecture */}
+                {/* 📚 Relecture — texto completo */}
                 <div>
                   {topic.relBooks?.length > 0 ? topic.relBooks.map((b,i) => (
-                    <div key={i} style={{ fontSize:10.5, color:"#8A6A30", lineHeight:1.5, marginBottom:1 }}>📚 {b.length>22?b.slice(0,22)+"…":b}</div>
+                    <div key={i} style={{ fontSize:10.5, color:"#8A6A30", lineHeight:1.5, marginBottom:2 }}>📚 {b}</div>
                   )) : <span style={{ fontSize:10.5, color:"rgba(176,168,187,.6)" }}>—</span>}
                 </div>
 
-                {/* 👁️ Vu dans — check individual por libro */}
+                {/* 👁️ Vu dans — check individual, texto completo */}
                 <div>
                   {(topic.vusBooks||[]).length > 0 ? (
                     <div>
                       {topic.vusBooks.map((b, i) => (
-                        <div key={i} onClick={()=>toggleVus(topic, i)} style={{ display:"flex", alignItems:"center", gap:5, marginBottom:3, cursor:"pointer" }}>
-                          <div style={{ width:14, height:14, borderRadius:4, border:`1.5px solid ${b.checked?"#5C9460":"rgba(61,43,79,.2)"}`, background:b.checked?"#5C9460":"white", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, transition:"all .15s" }}>
+                        <div key={i} onClick={()=>toggleVus(topic, i)} style={{ display:"flex", alignItems:"flex-start", gap:6, marginBottom:4, cursor:"pointer" }}>
+                          <div style={{ width:14, height:14, borderRadius:4, border:`1.5px solid ${b.checked?"#5C9460":"rgba(61,43,79,.2)"}`, background:b.checked?"#5C9460":"white", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginTop:1, transition:"all .15s" }}>
                             {b.checked && <span style={{ color:"white", fontSize:9, lineHeight:1 }}>✓</span>}
                           </div>
-                          <span style={{ fontSize:10.5, color:b.checked?"#4E7A4C":"var(--soft)", textDecoration:b.checked?"none":"none", lineHeight:1.3 }}>
-                            {b.name.length>22 ? b.name.slice(0,22)+"…" : b.name}
+                          <span style={{ fontSize:10.5, color:b.checked?"#4E7A4C":"var(--soft)", lineHeight:1.4 }}>
+                            {typeof b === "string" ? b : b.name}
                           </span>
                         </div>
                       ))}
@@ -608,23 +608,6 @@ export default function Progress() {
                   ) : (
                     <span style={{ fontSize:10.5, color:"rgba(176,168,187,.6)" }}>—</span>
                   )}
-                </div>
-
-                {/* 📖 Référence — check por cada ref + añadir más */}
-                <div>
-                  {(topic.refs||[]).map((r, i) => (
-                    <div key={i} onClick={()=>toggleRef(topic, i)} style={{ display:"flex", alignItems:"center", gap:5, marginBottom:3, cursor:"pointer" }}>
-                      <div style={{ width:14, height:14, borderRadius:4, border:`1.5px solid ${r.checked?spec.color:"rgba(61,43,79,.2)"}`, background:r.checked?spec.color:"white", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, transition:"all .15s" }}>
-                        {r.checked && <span style={{ color:"white", fontSize:9, lineHeight:1 }}>✓</span>}
-                      </div>
-                      <span style={{ fontSize:10.5, color:r.checked?spec.color:"var(--soft)", lineHeight:1.3 }}>
-                        {r.name.length>18 ? r.name.slice(0,18)+"…" : r.name}
-                      </span>
-                    </div>
-                  ))}
-
-                  {/* Añadir referencia extra */}
-                  <AddRefInline onAdd={(name) => addRef(topic, name)} />
                 </div>
 
                 {/* Acciones */}
@@ -644,7 +627,7 @@ export default function Progress() {
       <Modal open={booksOpen} onClose={()=>setBooksOpen(false)} title={`📚 Livres — N°${editingTopic?.num}`}>
         <div style={{ fontSize:12.5, color:"var(--soft)", marginBottom:14, fontStyle:"italic" }}>{editingTopic?.title?.slice(0,70)}</div>
         <div style={{ marginBottom:16 }}>
-          <label style={{ display:"block", fontSize:11.5, fontWeight:500, color:"var(--soft)", marginBottom:7 }}>✏️ Livres d'écriture (= Références)</label>
+          <label style={{ display:"block", fontSize:11.5, fontWeight:500, color:"var(--soft)", marginBottom:7 }}>📖 Références (Collège en écriture)</label>
           {tempBooks.ec?.map((b,i)=>(
             <div key={i} style={{ display:"flex", alignItems:"center", gap:6, marginBottom:5 }}>
               <span style={{ flex:1, fontSize:12.5, padding:"6px 10px", background:"var(--cream)", borderRadius:8, color:"var(--ink)" }}>{b}</span>
@@ -652,12 +635,12 @@ export default function Progress() {
             </div>
           ))}
           <div style={{ display:"flex", gap:6 }}>
-            <input type="text" value={tempBooks.ecInput||""} onChange={e=>setTempBooks(p=>({...p,ecInput:e.target.value}))} onKeyDown={e=>{ if(e.key==="Enter"&&tempBooks.ecInput?.trim()) setTempBooks(p=>({...p,ec:[...p.ec,p.ecInput.trim()],ecInput:""})); }} placeholder="Ajouter un livre… (Entrée)" style={{ flex:1, padding:"8px 12px", borderRadius:8, border:"1.5px solid rgba(61,43,79,.11)", background:"var(--cream)", fontSize:12.5, fontFamily:"inherit", outline:"none" }} />
+            <input type="text" value={tempBooks.ecInput||""} onChange={e=>setTempBooks(p=>({...p,ecInput:e.target.value}))} onKeyDown={e=>{ if(e.key==="Enter"&&tempBooks.ecInput?.trim()) setTempBooks(p=>({...p,ec:[...p.ec,p.ecInput.trim()],ecInput:""})); }} placeholder="Ajouter une référence… (Entrée)" style={{ flex:1, padding:"8px 12px", borderRadius:8, border:"1.5px solid rgba(61,43,79,.11)", background:"var(--cream)", fontSize:12.5, fontFamily:"inherit", outline:"none" }} />
             <button onClick={()=>{ if(tempBooks.ecInput?.trim()) setTempBooks(p=>({...p,ec:[...p.ec,p.ecInput.trim()],ecInput:""})); }} style={{ padding:"8px 14px", borderRadius:8, background:"var(--plum)", color:"white", border:"none", cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>+</button>
           </div>
         </div>
         <div>
-          <label style={{ display:"block", fontSize:11.5, fontWeight:500, color:"var(--soft)", marginBottom:7 }}>📖 Livres de relecture</label>
+          <label style={{ display:"block", fontSize:11.5, fontWeight:500, color:"var(--soft)", marginBottom:7 }}>📚 Relecture (compléments)</label>
           {tempBooks.rel?.map((b,i)=>(
             <div key={i} style={{ display:"flex", alignItems:"center", gap:6, marginBottom:5 }}>
               <span style={{ flex:1, fontSize:12.5, padding:"6px 10px", background:"var(--cream)", borderRadius:8, color:"var(--ink)" }}>{b}</span>
@@ -700,45 +683,33 @@ export default function Progress() {
           <Field label="Spécialité"><select value={newTopic.specialty} onChange={e=>setNewTopic(p=>({...p,specialty:e.target.value}))}>{MANON_SPECS.map(s=><option key={s.id} value={s.id}>{s.icon} {s.label}</option>)}</select></Field>
         </div>
         <Field label="Titre"><input type="text" value={newTopic.title} onChange={e=>setNewTopic(p=>({...p,title:e.target.value}))} placeholder="Titre officiel ECNi…" /></Field>
-        <Field label="✏️ Collège en écriture — séparés par •"><input type="text" value={newTopic.ecInput||""} onChange={e=>setNewTopic(p=>({...p,ecInput:e.target.value}))} placeholder="ex: Collège Cardio • Thérapeutique" /></Field>
-        <Field label="📖 Collège en relecture (optionnel)"><input type="text" value={newTopic.relInput||""} onChange={e=>setNewTopic(p=>({...p,relInput:e.target.value}))} placeholder="ex: Médecine interne • Urgences" /></Field>
+        <Field label="📖 Références — séparées par •"><input type="text" value={newTopic.ecInput||""} onChange={e=>setNewTopic(p=>({...p,ecInput:e.target.value}))} placeholder="ex: Collège Cardio • Thérapeutique" /></Field>
+        <Field label="📚 Relecture (optionnel)"><input type="text" value={newTopic.relInput||""} onChange={e=>setNewTopic(p=>({...p,relInput:e.target.value}))} placeholder="ex: Médecine interne • Urgences" /></Field>
         <div className="modal-actions"><Btn variant="ghost" onClick={()=>setAddOpen(false)}>Annuler</Btn><Btn variant="primary" onClick={addTopic}>Ajouter</Btn></div>
       </Modal>
     </div>
   );
 }
 
-// ── Componente inline para añadir referencia extra ───────────
+// ── Añadir referencia extra inline ────────────────────────────
 function AddRefInline({ onAdd }) {
-  const [open, setOpen]   = useState(false);
-  const [val,  setVal]    = useState("");
-  const inputRef          = useRef();
+  const [open, setOpen] = useState(false);
+  const [val,  setVal]  = useState("");
+  const inputRef        = useRef();
 
   useEffect(() => { if (open && inputRef.current) inputRef.current.focus(); }, [open]);
 
-  const confirm = () => {
-    if (val.trim()) { onAdd(val); setVal(""); setOpen(false); }
-  };
+  const confirm = () => { if (val.trim()) { onAdd(val); setVal(""); setOpen(false); } };
 
-  if (!open) {
-    return (
-      <div onClick={()=>setOpen(true)} style={{ fontSize:9.5, color:"var(--muted)", cursor:"pointer", marginTop:4, display:"inline-flex", alignItems:"center", gap:3 }}>
-        <span style={{ fontSize:11 }}>+</span> Autre référence
-      </div>
-    );
-  }
+  if (!open) return (
+    <div onClick={()=>setOpen(true)} style={{ fontSize:9.5, color:"var(--muted)", cursor:"pointer", marginTop:4, display:"inline-flex", alignItems:"center", gap:3 }}>
+      <span style={{ fontSize:11 }}>+</span> Autre référence
+    </div>
+  );
 
   return (
     <div style={{ display:"flex", gap:4, marginTop:4 }}>
-      <input
-        ref={inputRef}
-        type="text"
-        value={val}
-        onChange={e=>setVal(e.target.value)}
-        onKeyDown={e=>{ if(e.key==="Enter") confirm(); if(e.key==="Escape") setOpen(false); }}
-        placeholder="Nom du livre…"
-        style={{ flex:1, fontSize:10.5, padding:"3px 7px", borderRadius:6, border:"1.5px solid rgba(61,43,79,.15)", fontFamily:"inherit", outline:"none" }}
-      />
+      <input ref={inputRef} type="text" value={val} onChange={e=>setVal(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") confirm(); if(e.key==="Escape") setOpen(false); }} placeholder="Nom du livre…" style={{ flex:1, fontSize:10.5, padding:"3px 7px", borderRadius:6, border:"1.5px solid rgba(61,43,79,.15)", fontFamily:"inherit", outline:"none" }} />
       <button onClick={confirm} style={{ padding:"3px 8px", borderRadius:6, background:"var(--violet)", color:"white", border:"none", cursor:"pointer", fontSize:11 }}>+</button>
       <button onClick={()=>setOpen(false)} style={{ padding:"3px 6px", borderRadius:6, background:"transparent", color:"var(--muted)", border:"none", cursor:"pointer", fontSize:12 }}>×</button>
     </div>
