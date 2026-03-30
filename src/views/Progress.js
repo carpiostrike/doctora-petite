@@ -533,9 +533,9 @@ export default function Progress() {
                 display:"grid", gridTemplateColumns:"44px 1fr 180px 150px 180px 40px",
                 gap:5, alignItems:"start",
                 // Color de fondo = color de especialidad si tiene color en Excel
-                background: hasColor ? spec.color+"14" : topic.etudie==="encours" ? "rgba(201,169,110,.06)" : "white",
+                background: hasColor ? "#"+topic.bgHex+"30" : topic.etudie==="encours" ? "rgba(201,169,110,.06)" : "white",
                 borderRadius:12, padding:"10px 12px",
-                border:`1.5px solid ${hasColor ? spec.color+"50" : topic.etudie==="encours" ? "rgba(201,169,110,.3)" : "rgba(61,43,79,.06)"}`,
+                border:`1.5px solid ${hasColor ? "#"+topic.bgHex+"80" : topic.etudie==="encours" ? "rgba(201,169,110,.3)" : "rgba(61,43,79,.06)"}`,
                 transition:"all .15s",
               }}>
 
