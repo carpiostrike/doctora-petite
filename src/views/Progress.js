@@ -590,24 +590,26 @@ export default function Progress() {
                   )) : <span style={{ fontSize:10.5, color:"rgba(176,168,187,.6)" }}>—</span>}
                 </div>
 
-                {/* 👁️ Vu dans — check individual, texto completo */}
+                {/* 👁️ Vu dans — sin checks, icono ojo, separado por • y " - " */}
                 <div>
-                  {(topic.vusBooks||[]).length > 0 ? (
+                {(topic.vusBooks||[]).length > 0 ? (
                     <div>
-                      {topic.vusBooks.map((b, i) => (
-                        <div key={i} onClick={()=>toggleVus(topic, i)} style={{ display:"flex", alignItems:"flex-start", gap:6, marginBottom:4, cursor:"pointer" }}>
-                          <div style={{ width:14, height:14, borderRadius:4, border:`1.5px solid ${b.checked?"#5C9460":"rgba(61,43,79,.2)"}`, background:b.checked?"#5C9460":"white", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginTop:1, transition:"all .15s" }}>
-                            {b.checked && <span style={{ color:"white", fontSize:9, lineHeight:1 }}>✓</span>}
-                          </div>
-                          <span style={{ fontSize:10.5, color:b.checked?"#4E7A4C":"var(--soft)", lineHeight:1.4 }}>
-                            {typeof b === "string" ? b : b.name}
-                          </span>
+                      {topic.vusBooks
+                        .flatMap(b => {
+                          const name = typeof b === "string" ? b : b.name;
+                          return name.split(/\s*•\s*|\s+-\s+/).map(x => x.trim()).filter(Boolean);
+                          })
+                          .map((name, i) => (
+                          <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:5, marginBottom:3 }}>
+                          <span style={{ fontSize:10, color:"#5B80C4", flexShrink:0, marginTop:1 }}>👁️</span>
+                          <span style={{ fontSize:10.5, color:"var(--soft)", lineHeight:1.4 }}>{name}</span>
                         </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <span style={{ fontSize:10.5, color:"rgba(176,168,187,.6)" }}>—</span>
-                  )}
+                      ))
+                    }
+                   </div>
+                ) : (
+                  <span style={{ fontSize:10.5, color:"rgba(176,168,187,.6)" }}>—</span>
+                )}
                 </div>
 
                 {/* Acciones */}
