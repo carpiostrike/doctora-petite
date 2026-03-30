@@ -52,7 +52,7 @@ function detectSpecByName(text) {
   return "other";
 }
 
-const splitBooks = (s) => (s || "").split(/[•/\n]/).map(x => x.trim()).filter(Boolean);
+const splitBooks = (s) => (s || "").split(/[•\-/\n]/).map(x => x.trim()).filter(Boolean);
 
 // ── Supabase helpers ─────────────────────────────────────────
 
