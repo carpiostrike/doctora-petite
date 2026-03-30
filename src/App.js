@@ -1,6 +1,6 @@
 // ============================================================
 //  DOCTORA PETITE — Built for Manon
-//  App.js v7 — Config cargada desde Supabase al arrancar
+//  App.js v8 — Eventos guardados en Supabase
 // ============================================================
 
 import { useState, useEffect, createContext, useContext, useCallback } from "react";
@@ -80,7 +80,6 @@ function computeProgress(topics) {
 }
 
 function getDemoDocuments() { return []; }
-function getDemoEvents()    { return []; }
 
 // ─── CLAUDE AI ───────────────────────────────────────────────
 
@@ -136,24 +135,42 @@ function AppProvider({ children }) {
       .single()
       .then(({ data }) => {
         if (data) {
-          if (data.claude_key) {
-            setApiKey(data.claude_key);
-            localStorage.setItem("dp_apiKey", data.claude_key);
-          }
-          if (data.sheet_url) localStorage.setItem("dp_sheet_url", data.sheet_url);
-          if (data.gapi_key)  localStorage.setItem("dp_gapi_key",  data.gapi_key);
+          if (data.claude_key) { setApiKey(data.claude_key); localStorage.setItem("dp_apiKey", data.claude_key); }
+          if (data.sheet_url)  localStorage.setItem("dp_sheet_url", data.sheet_url);
+          if (data.gapi_key)   localStorage.setItem("dp_gapi_key",  data.gapi_key);
         }
       })
       .catch(() => {})
       .finally(() => setConfigReady(true));
   }, []);
 
-  useEffect(()=>{
+  // ── Cargar eventos desde Supabase al arrancar ─────────────
+  useEffect(() => {
+    supabase
+      .from("events")
+      .select("*")
+      .order("date", { ascending: true })
+      .then(({ data, error }) => {
+        if (error) { console.error(error); return; }
+        setEvents((data || []).map(row => ({
+          id:           row.id,
+          title:        row.title,
+          type:         row.type,
+          specialty:    row.specialty,
+          date:         row.date,
+          time:         row.time,
+          linkedDocId:  row.linked_doc_id,
+          reminder:     row.reminder,
+        })));
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
     setDocuments(getDemoDocuments());
-    setEvents(getDemoEvents());
     syncProgress();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[]);
+  }, []);
 
   const syncProgress = useCallback(()=>{
     try {
@@ -180,12 +197,40 @@ function AppProvider({ children }) {
     setTimeout(()=>setNotification(null), 3800);
   },[]);
 
-  const saveEvent = useCallback((ev)=>{
-    const newEv = {...ev, id:ev.id||crypto.randomUUID()};
-    setEvents(prev=>[...prev.filter(e=>e.id!==newEv.id), newEv]);
-    notify("✅","Événement enregistré","Ajouté au calendrier.");
+  // ── Guardar evento en Supabase + estado local ─────────────
+  const saveEvent = useCallback(async (ev) => {
+    const newEv = { ...ev, id: ev.id || crypto.randomUUID() };
+    // Actualizar estado local inmediatamente
+    setEvents(prev => [...prev.filter(e => e.id !== newEv.id), newEv]);
+    // Guardar en Supabase
+    try {
+      const { error } = await supabase.from("events").upsert({
+        id:           newEv.id,
+        title:        newEv.title,
+        type:         newEv.type,
+        specialty:    newEv.specialty,
+        date:         newEv.date,
+        time:         newEv.time,
+        linked_doc_id: newEv.linkedDocId || "",
+        reminder:     newEv.reminder,
+      }, { onConflict: "id" });
+      if (error) throw error;
+      notify("✅", "Événement enregistré", "Ajouté au calendrier 🌸");
+    } catch (err) {
+      notify("❌", "Erreur sauvegarde", err.message);
+    }
     return newEv;
-  },[notify]);
+  }, [notify]);
+
+  // ── Eliminar evento de Supabase + estado local ────────────
+  const deleteEvent = useCallback(async (id) => {
+    setEvents(prev => prev.filter(e => e.id !== id));
+    try {
+      await supabase.from("events").delete().eq("id", id);
+    } catch (err) {
+      notify("❌", "Erreur suppression", err.message);
+    }
+  }, [notify]);
 
   const updateSemesterSpecs = useCallback((ids)=>{
     setSemesterSpecs(ids);
@@ -196,7 +241,7 @@ function AppProvider({ children }) {
   const value = {
     activeView, setActiveView,
     documents, setDocuments,
-    events, saveEvent,
+    events, saveEvent, deleteEvent,
     progress, syncProgress,
     semesterSpecs, updateSemesterSpecs,
     notification, notify,

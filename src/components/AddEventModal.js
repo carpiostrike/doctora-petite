@@ -1,3 +1,7 @@
+// ============================================================
+//  DOCTORA PETITE — AddEventModal.js
+// ============================================================
+
 import { useState } from "react";
 import { useApp, Modal, Field, Btn } from "../App";
 import { SPECIALTIES, todayStr } from "../constants";
