@@ -11,6 +11,7 @@ export default function Sidebar() {
     { id:"hospital",  icon:"✚", label:"Mode Hôpital"    },
     { id:"progress",  icon:"📊", label:"Progression"    },
     { id:"plan",      icon:"🗓️", label:"Plan de révision" },
+    { id:"nous",      icon:"💜", label:"Nous"             },
   ];
 
   return (
