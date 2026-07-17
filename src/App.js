@@ -19,6 +19,7 @@ import SettingsModal  from "./components/SettingsModal";
 import AddEventModal  from "./components/AddEventModal";
 import Plan           from "./views/Plan";
 import { supabase }   from "./lib/supabaseClient";
+import Nous           from "./views/Nous";
 
 // ─── ALL SPECIALTIES ─────────────────────────────────────────
 
@@ -312,6 +313,7 @@ function AppShell() {
     hospital:  <Hospital />,
     progress:  <Progress />,
     plan:      <Plan />,
+    nous:      <Nous />,
   };
 
   return (
